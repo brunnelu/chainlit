@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from enum import Enum
 from pathlib import Path
 from typing import (
@@ -36,8 +38,8 @@ class ThreadDict(TypedDict):
     userIdentifier: Optional[str]
     tags: Optional[List[str]]
     metadata: Optional[Dict]
-    steps: List["StepDict"]
-    elements: Optional[List["ElementDict"]]
+    steps: List[StepDict]
+    elements: Optional[List[ElementDict]]
 
 
 class Pagination(BaseModel):
@@ -46,9 +48,9 @@ class Pagination(BaseModel):
 
 
 class ThreadFilter(BaseModel):
-    feedback: Optional[Literal[0, 1]] = None
-    userId: Optional[str] = None
-    search: Optional[str] = None
+    feedback: Literal[0, 1] | None = None
+    userId: str | None = None
+    search: str | None = None
 
 
 @dataclass
@@ -65,7 +67,7 @@ class PageInfo:
         }
 
     @classmethod
-    def from_dict(cls, page_info_dict: Dict) -> "PageInfo":
+    def from_dict(cls, page_info_dict: Dict) -> PageInfo:
         hasNextPage = page_info_dict.get("hasNextPage", False)
         startCursor = page_info_dict.get("startCursor", None)
         endCursor = page_info_dict.get("endCursor", None)
@@ -100,7 +102,7 @@ class PaginatedResponse(Generic[T]):
     @classmethod
     def from_dict(
         cls, paginated_response_dict: Dict, the_class: HasFromDict[T]
-    ) -> "PaginatedResponse[T]":
+    ) -> PaginatedResponse[T]:
         pageInfo = PageInfo.from_dict(paginated_response_dict.get("pageInfo", {}))
 
         data = [the_class.from_dict(d) for d in paginated_response_dict.get("data", [])]
@@ -125,7 +127,7 @@ class AskSpec(DataClassJsonMixin):
     """Specification for asking the user."""
 
     timeout: int
-    type: Literal["text", "file", "action"]
+    type: Literal["text", "file", "action", "element"]
     step_id: str
 
 
@@ -137,6 +139,13 @@ class AskFileSpec(FileSpec, AskSpec, DataClassJsonMixin):
 @dataclass
 class AskActionSpec(ActionSpec, AskSpec, DataClassJsonMixin):
     """Specification for asking the user an action"""
+
+
+@dataclass
+class AskElementSpec(AskSpec, DataClassJsonMixin):
+    """Specification for asking the user a custom element"""
+
+    element_id: str
 
 
 class FileReference(TypedDict):
@@ -152,7 +161,7 @@ class FileDict(TypedDict):
 
 
 class MessagePayload(TypedDict):
-    message: "StepDict"
+    message: StepDict
     fileReferences: Optional[List[FileReference]]
 
 
@@ -195,6 +204,10 @@ class AskActionResponse(TypedDict):
     id: str
 
 
+class AskElementResponse(TypedDict, total=False):
+    submitted: bool
+
+
 class UpdateThreadRequest(BaseModel):
     threadId: str
     name: str
@@ -230,9 +243,22 @@ class ConnectSseMCPRequest(BaseModel):
     clientType: Literal["sse"]
     name: str
     url: str
+    # Optional HTTP headers to forward to the MCP transport (e.g. Authorization)
+    headers: Optional[Dict[str, str]] = None
 
 
-ConnectMCPRequest = Union[ConnectStdioMCPRequest, ConnectSseMCPRequest]
+class ConnectStreamableHttpMCPRequest(BaseModel):
+    sessionId: str
+    clientType: Literal["streamable-http"]
+    name: str
+    url: str
+    # Optional HTTP headers to forward to the MCP transport (e.g. Authorization)
+    headers: Dict[str, str] | None = None
+
+
+ConnectMCPRequest = Union[
+    ConnectStdioMCPRequest, ConnectSseMCPRequest, ConnectStreamableHttpMCPRequest
+]
 
 
 class DisconnectMCPRequest(BaseModel):
@@ -256,6 +282,7 @@ class Starter(DataClassJsonMixin):
 
     label: str
     message: str
+    command: Optional[str] = None
     icon: Optional[str] = None
 
 
@@ -268,6 +295,7 @@ class ChatProfile(DataClassJsonMixin):
     icon: Optional[str] = None
     default: bool = False
     starters: Optional[List[Starter]] = None
+    config_overrides: Any = None
 
 
 FeedbackStrategy = Literal["BINARY"]

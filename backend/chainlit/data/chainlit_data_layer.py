@@ -1,4 +1,7 @@
+import asyncio
+import atexit
 import json
+import signal
 import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
@@ -8,6 +11,7 @@ import asyncpg  # type: ignore
 
 from chainlit.data.base import BaseDataLayer
 from chainlit.data.storage_clients.base import BaseStorageClient
+from chainlit.data.storage_clients.gcs import GCSStorageClient
 from chainlit.data.utils import queue_until_user_message
 from chainlit.element import ElementDict
 from chainlit.logger import logger
@@ -42,6 +46,11 @@ class ChainlitDataLayer(BaseDataLayer):
         self.storage_client = storage_client
         self.show_logger = show_logger
 
+        # Register cleanup handlers for application termination
+        atexit.register(self._sync_cleanup)
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            signal.signal(sig, self._signal_handler)
+
     async def connect(self):
         if not self.pool:
             self.pool = await asyncpg.create_pool(self.database_url)
@@ -55,16 +64,26 @@ class ChainlitDataLayer(BaseDataLayer):
         if not self.pool:
             await self.connect()
 
-        async with self.pool.acquire() as connection:  # type: ignore
-            try:
-                if params:
-                    records = await connection.fetch(query, *params.values())
-                else:
-                    records = await connection.fetch(query)
-                return [dict(record) for record in records]
-            except Exception as e:
-                logger.error(f"Database error: {e!s}")
-                raise
+        try:
+            async with self.pool.acquire() as connection:  # type: ignore
+                try:
+                    if params:
+                        records = await connection.fetch(query, *params.values())
+                    else:
+                        records = await connection.fetch(query)
+                    return [dict(record) for record in records]
+                except Exception as e:
+                    logger.error(f"Database error: {e!s}")
+                    raise
+        except (
+            asyncpg.exceptions.ConnectionDoesNotExistError,
+            asyncpg.exceptions.InterfaceError,
+        ) as e:
+            # Handle connection issues by cleaning up and rethrowing
+            logger.error(f"Connection error: {e!s}, cleaning up pool")
+            await self.cleanup()
+            self.pool = None
+            raise
 
     async def get_user(self, identifier: str) -> Optional[PersistedUser]:
         query = """
@@ -138,7 +157,7 @@ class ChainlitDataLayer(BaseDataLayer):
     @queue_until_user_message()
     async def create_element(self, element: "Element"):
         if not self.storage_client:
-            logger.warn(
+            logger.warning(
                 "Data Layer: create_element error. No cloud storage configured!"
             )
             return
@@ -181,11 +200,17 @@ class ChainlitDataLayer(BaseDataLayer):
             path = f"files/{element.id}"
 
         if content is not None:
+            content_disposition = (
+                f'attachment; filename="{element.name}"'
+                if not isinstance(self.storage_client, GCSStorageClient)
+                else None
+            )
             await self.storage_client.upload_file(
                 object_key=path,
                 data=content,
                 mime=element.mime or "application/octet-stream",
                 overwrite=True,
+                content_disposition=content_disposition,
             )
 
         query = """
@@ -432,11 +457,11 @@ class ChainlitDataLayer(BaseDataLayer):
             param_count += 1
 
         if pagination.cursor:
-            query += f' AND t."createdAt" < (SELECT "createdAt" FROM "Thread" WHERE id = ${param_count})'
+            query += f' AND t."updatedAt" < (SELECT "updatedAt" FROM "Thread" WHERE id = ${param_count})'
             params["cursor"] = pagination.cursor
             param_count += 1
 
-        query += f' ORDER BY t."createdAt" DESC LIMIT ${param_count}'
+        query += f' ORDER BY t."updatedAt" DESC LIMIT ${param_count}'
         params["limit"] = pagination.first + 1
 
         results = await self.execute_query(query, params)
@@ -549,6 +574,7 @@ class ChainlitDataLayer(BaseDataLayer):
             "userId": user_id,
             "tags": tags,
             "metadata": json.dumps(metadata or {}),
+            "updatedAt": datetime.now(),
         }
 
         # Remove None values
@@ -561,12 +587,19 @@ class ChainlitDataLayer(BaseDataLayer):
 
         update_sets = [f'"{k}" = EXCLUDED."{k}"' for k in data.keys() if k != "id"]
 
-        query = f"""
-            INSERT INTO "Thread" ({", ".join(columns)})
-            VALUES ({", ".join(placeholders)})
-            ON CONFLICT (id) DO UPDATE
-            SET {", ".join(update_sets)};
-        """
+        if update_sets:
+            query = f"""
+                INSERT INTO "Thread" ({", ".join(columns)})
+                VALUES ({", ".join(placeholders)})
+                ON CONFLICT (id) DO UPDATE
+                SET {", ".join(update_sets)};
+            """
+        else:
+            query = f"""
+                INSERT INTO "Thread" ({", ".join(columns)})
+                VALUES ({", ".join(placeholders)})
+                ON CONFLICT (id) DO NOTHING
+            """
 
         await self.execute_query(query, {str(i + 1): v for i, v in enumerate(values)})
 
@@ -626,6 +659,28 @@ class ChainlitDataLayer(BaseDataLayer):
         """Cleanup database connections"""
         if self.pool:
             await self.pool.close()
+
+    def _sync_cleanup(self):
+        """Cleanup database connections in a synchronous context."""
+        if self.pool and not self.pool.is_closing():
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(self.cleanup())
+            else:
+                try:
+                    cleanup_loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(cleanup_loop)
+                    cleanup_loop.run_until_complete(self.cleanup())
+                    cleanup_loop.close()
+                except Exception as e:
+                    logger.error(f"Error during sync cleanup: {e}")
+
+    def _signal_handler(self, sig, frame):
+        """Handle signals for graceful shutdown."""
+        logger.info(f"Received signal {sig}, cleaning up connection pool.")
+        self._sync_cleanup()
+        # Re-raise the signal after cleanup
+        signal.default_int_handler(sig, frame)
 
 
 def truncate(text: Optional[str], max_length: int = 255) -> Optional[str]:

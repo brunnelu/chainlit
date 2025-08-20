@@ -38,6 +38,7 @@ class SQLAlchemyDataLayer(BaseDataLayer):
     def __init__(
         self,
         conninfo: str,
+        connect_args: Optional[dict[str, Any]] = None,
         ssl_require: bool = False,
         storage_provider: Optional[BaseStorageClient] = None,
         user_thread_limit: Optional[int] = 1000,
@@ -46,15 +47,16 @@ class SQLAlchemyDataLayer(BaseDataLayer):
         self._conninfo = conninfo
         self.user_thread_limit = user_thread_limit
         self.show_logger = show_logger
-        ssl_args = {}
+        if connect_args is None:
+            connect_args = {}
         if ssl_require:
             # Create an SSL context to require an SSL connection
             ssl_context = ssl.create_default_context()
             ssl_context.check_hostname = False
             ssl_context.verify_mode = ssl.CERT_NONE
-            ssl_args["ssl"] = ssl_context
+            connect_args["ssl"] = ssl_context
         self.engine: AsyncEngine = create_async_engine(
-            self._conninfo, connect_args=ssl_args
+            self._conninfo, connect_args=connect_args
         )
         self.async_session = sessionmaker(
             bind=self.engine, expire_on_commit=False, class_=AsyncSession
@@ -558,16 +560,26 @@ class SQLAlchemyDataLayer(BaseDataLayer):
             logger.info("SQLAlchemy: get_all_user_threads")
         user_threads_query = """
             SELECT
-                "id" AS thread_id,
-                "createdAt" AS thread_createdat,
-                "name" AS thread_name,
-                "userId" AS user_id,
-                "userIdentifier" AS user_identifier,
-                "tags" AS thread_tags,
-                "metadata" AS thread_metadata
-            FROM threads
-            WHERE "userId" = :user_id OR "id" = :thread_id
-            ORDER BY "createdAt" DESC
+                t."id" AS thread_id,
+                t."createdAt" AS thread_createdat,
+                t."name" AS thread_name,
+                t."userId" AS user_id,
+                t."userIdentifier" AS user_identifier,
+                t."tags" AS thread_tags,
+                t."metadata" AS thread_metadata,
+                MAX(s."createdAt") AS updatedAt
+            FROM threads t
+            LEFT JOIN steps s ON t."id" = s."threadId"
+            WHERE t."userId" = :user_id OR t."id" = :thread_id
+            GROUP BY
+                t."id",
+                t."createdAt",
+                t."name",
+                t."userId",
+                t."userIdentifier",
+                t."tags",
+                t."metadata"
+            ORDER BY updatedAt DESC NULLS LAST
             LIMIT :limit
         """
         user_threads = await self.execute_sql(
