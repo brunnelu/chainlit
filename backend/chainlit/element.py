@@ -59,6 +59,7 @@ class ElementDict(TypedDict, total=False):
     size: Optional[ElementSize]
     language: Optional[str]
     page: Optional[int]
+    element_name: Optional[str]
     props: Optional[Dict]
     autoPlay: Optional[bool]
     playerConfig: Optional[dict]
@@ -181,8 +182,12 @@ class Element:
             return Plotly(size=e_dict.get("size", "medium"), **common_params)  # type: ignore[arg-type]
 
         elif type == "custom":
-            # For backwards compatibility, the name is used as the element_name
-            return CustomElement(element_name=e_dict.get("element_name", name), props=e_dict.get("props", {}), **common_params)  # type: ignore[arg-type]
+            # For backwards compatibility, the name is used as fallback element_name
+            return CustomElement(
+                element_name=e_dict.get("element_name", name),  # type: ignore[arg-type]
+                props=e_dict.get("props", {}),  # type: ignore[arg-type]
+                **common_params,  # type: ignore[arg-type]
+            )
         else:
             # Default to File for any other type
             return File(**common_params)  # type: ignore[arg-type]
@@ -445,7 +450,7 @@ class CustomElement(Element):
 
     type: ClassVar[ElementType] = "custom"
     mime: str = "application/json"
-    element_name: str = Field(default=None)
+    element_name: Union[str, None] = Field(default=None)
     props: Dict = Field(default_factory=dict)
 
     def __post_init__(self) -> None:

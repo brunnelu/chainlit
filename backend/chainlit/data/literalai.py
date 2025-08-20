@@ -107,6 +107,7 @@ class LiteralToChainlitConverter:
             "autoPlay": metadata.get("autoPlay", None),
             "playerConfig": metadata.get("playerConfig", None),
             "page": metadata.get("page"),
+            "element_name": metadata.get("element_name"),
             "props": metadata.get("props"),
             "size": metadata.get("size"),
             "type": metadata.get("type", "file"),
@@ -293,6 +294,7 @@ class LiteralDataLayer(BaseDataLayer):
             "type": element.type,
             "page": getattr(element, "page", None),
             "props": getattr(element, "props", None),
+            "element_name": getattr(element, "element_name", None),
         }
 
         if not element.for_id:

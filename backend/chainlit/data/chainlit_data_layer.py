@@ -234,6 +234,7 @@ class ChainlitDataLayer(BaseDataLayer):
                     "display": element.display,
                     "type": element.type,
                     "page": getattr(element, "page", None),
+                    "element_name": getattr(element, "element_name", None),
                 }
             ),
             "mime": element.mime,
@@ -282,6 +283,7 @@ class ChainlitDataLayer(BaseDataLayer):
             page=row["page"],
             autoPlay=row.get("autoPlay"),
             playerConfig=row.get("playerConfig"),
+            element_name=metadata.get("element_name"),
             props=json.loads(row.get("props", "{}")),
         )
 
@@ -649,6 +651,7 @@ class ChainlitDataLayer(BaseDataLayer):
             page=row["page"],
             autoPlay=row.get("autoPlay"),
             playerConfig=row.get("playerConfig"),
+            element_name=metadata.get("element_name"),
             props=json.loads(row.get("props") or "{}"),
         )
 

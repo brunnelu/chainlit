@@ -1043,6 +1043,7 @@ async def delete_thread_element(
         for_id=element_dict.get("forId") or "",
         thread_id=element_dict.get("threadId") or "",
         name=element_dict["name"],
+        element_name=element_dict.get("element_name"),
         props=element_dict.get("props") or {},
         display=element_dict["display"],
     )
